@@ -24,6 +24,7 @@ dependencies:
 - indexed-traversable
 - lens
 - linear
+- mtl
 - parsec
 - split
 - vector
