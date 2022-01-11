@@ -31,6 +31,9 @@ library
       AOC2019.Day3Part2
       AOC2019.Day4
       AOC2019.Day5
+      AOC2019.Day6
+      AOC2019.Day7
+      AOC2019.Day8
       AOC2019.Intcode
   other-modules:
       Paths_advent_of_code_y2019

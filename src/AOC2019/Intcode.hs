@@ -283,14 +283,22 @@ pmGet addr = gets ((! addr) . psMemory)
 pmEvalP :: Param -> ProgramM Int
 pmEvalP param = gets (evalP param . psMemory)
 
-pmPeekInput :: ProgramM Int
-pmPeekInput = gets (head . psInputs)
+pmPeekInput :: ProgramM (Maybe Int)
+pmPeekInput = gets (listToMaybe . psInputs)
 
-pmPopInput :: ProgramM Int
+pmPopInput :: ProgramM (Maybe Int)
 pmPopInput = do
-  i <- pmPeekInput
-  modify' $ overInputs tail
-  pure i
+  inputs <- gets psInputs
+  case inputs of
+    [] -> pure Nothing
+    i:inputs' -> do
+      modify' $ overInputs (const inputs')
+      pure (Just i)
+
+-- | Adds an input to the end of the input queue, to be consumed after all
+-- current inputs are consumed.
+pmQueueInput :: Int -> ProgramM ()
+pmQueueInput i = modify' $ overInputs (++ [i])
 
 pmPushOutput :: Int -> ProgramM ()
 pmPushOutput i = modify' $ overOutputs (i :)
@@ -309,6 +317,14 @@ pmAdvance offset = modify' $ overInstrPtr (+ A offset)
 
 pmJump :: Address -> ProgramM ()
 pmJump addr = modify' $ overInstrPtr (const addr)
+
+pmExecUntilOutput :: ProgramM Int
+pmExecUntilOutput = do
+  instr <- pmInstr
+  pmExecCurrent
+  case iOp instr of
+    Output -> gets (head . psOutputs)
+    _ -> pmExecUntilOutput
 
 pmExec :: ProgramM ()
 pmExec = sequence_ (repeat pmExecCurrent)
@@ -339,10 +355,13 @@ pmApplyInstr instr =
       pmSet addr (i0 * i1)
       pure False
     (Input, [pout]) -> do
-      i <- pmPopInput
-      let addr = A $ pValue pout
-      pmSet addr i
-      pure False
+      mi <- pmPopInput
+      case mi of
+        Nothing -> throwError $ InterruptError "Input unavailable"
+        Just i -> do
+          let addr = A $ pValue pout
+          pmSet addr i
+          pure False
     (Output, [pi0]) -> do
       i0 <- pmEvalP pi0
       pmPushOutput i0
