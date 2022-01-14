@@ -34,7 +34,9 @@ library
       AOC2019.Day6
       AOC2019.Day7
       AOC2019.Day8
+      AOC2019.Day9
       AOC2019.Intcode
+      AOC2019.Intcode9
   other-modules:
       Paths_advent_of_code_y2019
   hs-source-dirs:
