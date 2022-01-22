@@ -26,6 +26,11 @@ library
   exposed-modules:
       AOC2019.Common
       AOC2019.Day1
+      AOC2019.Day10
+      AOC2019.Day11
+      AOC2019.Day12
+      AOC2019.Day13
+      AOC2019.Day13Part2
       AOC2019.Day2
       AOC2019.Day3
       AOC2019.Day3Part2
@@ -36,7 +41,9 @@ library
       AOC2019.Day8
       AOC2019.Day9
       AOC2019.Intcode
+      AOC2019.Intcode13
       AOC2019.Intcode9
+      AOC2019.IntcodeProgram
   other-modules:
       Paths_advent_of_code_y2019
   hs-source-dirs:
