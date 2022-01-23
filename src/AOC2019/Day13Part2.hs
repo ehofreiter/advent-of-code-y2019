@@ -1,8 +1,9 @@
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE LambdaCase #-}
 module AOC2019.Day13Part2 where
 
 import Control.Applicative
+import Control.Concurrent
 import Control.Monad
 import Control.Monad.State
 import Control.Monad.Writer
@@ -46,28 +47,95 @@ load filePath = do
 exec :: IC.Program -> IO ()
 exec inputs = do
   --print inputs
-  --print (part1 inputs)
+  print (part1 inputs)
   part2 inputs
 
 part2 :: IC.Program -> IO ()
-part2 intcode = do
-  putStrLn "part2"
-  (_, finalGameState) <- flip runStateT Map.empty $ runWriterT
-    $ IC.interactProgram (mkFree intcode) outputInput
-  printGameState finalGameState
-  putStrLn "done"
+part2 intcode = breakout intcode solve
+
+breakoutPrompt :: IC.Program -> IO ()
+breakoutPrompt intcode = do
+  putStrLn "Choose mode: a/p/s (a = autoplay, p = play, s = solve)"
+  playType <- getInputLn $ \case
+    'a':_ -> Just autoPlay
+    'p':_ -> Just play
+    's':_ -> Just solve
+    _ -> Nothing
+  breakout intcode playType
+
+breakout :: IC.Program -> ([Integer] -> StateT GameState IO Integer) -> IO ()
+breakout intcode playType = do
+  ((_, ps, outputs), gameState) <- runStateT (resultM playType) Map.empty
+  printGameState (updateGameState outputs gameState)
+  where
+    resultM p = IC.runProgramT (IC.interactProgram p) (pure 0) ps0
+    ps0 = IC.initProgram (mkFree intcode)
+
+getInputLn :: (String -> Maybe a) -> IO a
+getInputLn f = do
+  str <- getLine
+  case f str of
+    Just x -> pure x
+    Nothing -> getInputLn f
 
 mkFree :: IC.Program -> IC.Program
 mkFree (i:p) = 2:p
 
-outputInput
+solve :: (MonadState GameState m, MonadIO m) => [Integer] -> m Integer
+solve outputs = do
+  modify' (updateGameState outputs)
+  gets autoJoystick
+
+autoPlay :: (MonadState GameState m, MonadIO m) => [Integer] -> m Integer
+autoPlay outputs = do
+  updatePrintGameState outputs
+  gameState <- get
+  let move = autoJoystick gameState
+  liftIO $ putStrLn $ "Automove: " <> show move
+  liftIO $ threadDelay (10^4)
+  pure move
+
+autoJoystick :: GameState -> Integer
+autoJoystick gs = fromIntegral $ signum $ ballX - paddleX
+  where
+    V2 ballX _ = ballPos gs
+    V2 paddleX _ = paddlePos gs
+
+play :: (MonadState GameState m, MonadIO m) => [Integer] -> m Integer
+play outputs = do
+  updatePrintGameState outputs
+  liftIO getJoystick
+
+getJoystick :: IO Integer
+getJoystick = do
+  putStrLn "Tilt joystick: a/s/d (a = left, s = neutral, d = right)"
+  getInputLn $ \case
+    "a" -> Just (-1)
+    "s" -> Just 0
+    "d" -> Just 1
+    _ -> Nothing
+
+updatePrintGameState
   :: (MonadState GameState m, MonadIO m)
-  => [Integer] -> m Integer
-outputInput outputs = do
-  modify' (Map.union newChunks)
+  => [Integer] -> m ()
+updatePrintGameState outputs = do
+  modify' (updateGameState outputs)
   gameState <- get
   printGameState gameState
-  liftIO readLn
+
+type GameState = Map.Map (V2 Int) Int
+
+ballPos :: GameState -> V2 Int
+ballPos = head . tilePositions Tball
+
+paddlePos :: GameState -> V2 Int
+paddlePos = head . tilePositions Tpaddle
+
+tilePositions :: Tid -> GameState -> [V2 Int]
+tilePositions tid = Map.keys . Map.filter (== tidToInt tid)
+
+updateGameState :: [Integer] -> GameState -> GameState
+updateGameState outputs = Map.union newChunks
   where
     newChunks = Map.fromList $ map f $ chunksOf 3 outputs
     f [x,y,t] = (V2 (fromIntegral x) (fromIntegral y), fromIntegral t)
@@ -75,50 +143,28 @@ outputInput outputs = do
 showGameState :: GameState -> [String]
 showGameState gs = "Score: " <> show score : showScreen screen
   where
-    chunks = map mkChunk $ Map.toList gs
-    screen = Map.fromList $ mapMaybe getTile chunks
-    score = asum $ map getScore chunks
+    (score, screen) = bimap (fromMaybe 0) (fmap intToTid) $
+      Map.updateLookupWithKey (\_ _ -> Nothing) (V2 (-1) 0) gs
 
 printGameState :: MonadIO m => GameState -> m ()
 printGameState = liftIO . mapM_ putStrLn . showGameState
 
-type GameState = Map.Map (V2 Int) Int
-
-getTile :: Chunk -> Maybe Tile
-getTile c = case c of
-  Tile t -> Just t
-  _ -> Nothing
-
-getScore :: Chunk -> Maybe Int
-getScore c = case c of
-  Score s -> Just s
-  _ -> Nothing
-
-data Chunk
-  = Tile Tile
-  | Score Int
-
-mkChunk :: (V2 Int, Int) -> Chunk
-mkChunk (v, t) =
-  case v of
-    V2 (-1) 0 -> Score t
-    _         -> Tile (v, intToTid t)
-
-part1 :: IC.Program -> Either (IC.Result (Writer [Integer]) ()) Int
+part1 :: IC.Intcode -> Either (IC.Result ()) Int
 part1 = fmap blockCount . extractScreen
 
 blockCount :: Screen -> Int
 blockCount = length . filter (== Tblock) . Map.elems
 
-extractScreen :: IC.Program -> Either (IC.Result (Writer [Integer]) ()) Screen
+extractScreen :: IC.Intcode -> Either (IC.Result ()) Screen
 extractScreen intcode =
-  case fst $ runWriter $ IC.interactProgram intcode (const $ pure 0) of
-    ((Left IC.InterruptHalt, _), outputs) ->
+  case IC.runProgramM program 0 intcode of
+    (Left IC.InterruptHalt, _, outputs) ->
       let tiles = map mkTile . chunksOf 3 $ outputs
           screen = foldl' drawTile Map.empty tiles
       in  Right screen
-    (result, _) -> Left result
+    result -> Left result
   where
+    program = IC.interactProgram (const $ pure 0)
     mkTile [x,y,t] =
       (V2 (fromIntegral x) (fromIntegral y), intToTid (fromIntegral t))
 

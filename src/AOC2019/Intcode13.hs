@@ -7,8 +7,7 @@ module AOC2019.Intcode13
 
 import Control.Monad.Except
 import Control.Monad.Identity
-import Control.Monad.State
-import Control.Monad.Writer
+import Control.Monad.RWS
 import Data.Bifunctor
 import Data.List
 import Data.Maybe
@@ -18,63 +17,33 @@ import qualified Data.Vector as V
 
 import AOC2019.IntcodeProgram
 
-data ProgramState m = ProgramState
-  { psInternal :: InternalState
-  , psReadInput :: m Integer
-  , psWriteOutput :: Integer -> m ()
-  }
+type Intcode = Program
 
-instance Show (ProgramState m) where
-  show ps
-    = "ProgramState "
-    <> "{ psInternal = " <> show (psInternal ps)
-    <> ", psReadInput = <m Integer>"
-    <> ", psWriteOutput = <Integer -> m ()>"
+type Env m = m Integer
 
-overInternal
-  :: (InternalState -> InternalState)
-  -> ProgramState m -> ProgramState m
-overInternal f ps = ps { psInternal = f $ psInternal ps }
+type Outputs = [Integer]
 
-overReadInput
-  :: (m Integer -> m Integer)
-  -> ProgramState m -> ProgramState m
-overReadInput f ps = ps { psReadInput = f $ psReadInput ps }
-
-data InternalState = InternalState
-  { inMemory :: Memory
-  , inInstrPtr :: Address -- ^ instruction pointer
-  , inRelBase :: Address -- ^ relative base
+data ProgramState = ProgramState
+  { psMemory :: Memory
+  , psInstrPtr :: Address -- ^ instruction pointer
+  , psRelBase :: Address -- ^ relative base
   }
   deriving (Eq, Show)
 
-overMemory :: (Memory -> Memory) -> InternalState -> InternalState
-overMemory f ins = ins { inMemory = f $ inMemory ins }
+overMemory :: (Memory -> Memory) -> ProgramState -> ProgramState
+overMemory f ins = ins { psMemory = f $ psMemory ins }
 
-overInstrPtr :: (Address -> Address) -> InternalState -> InternalState
-overInstrPtr f ins = ins { inInstrPtr = f $ inInstrPtr ins }
+overInstrPtr :: (Address -> Address) -> ProgramState -> ProgramState
+overInstrPtr f ins = ins { psInstrPtr = f $ psInstrPtr ins }
 
-overRelBase :: (Address -> Address) -> InternalState -> InternalState
-overRelBase f ins = ins { inRelBase = f $ inRelBase ins }
+overRelBase :: (Address -> Address) -> ProgramState -> ProgramState
+overRelBase f ins = ins { psRelBase = f $ psRelBase ins }
 
-psMemory :: ProgramState m -> Memory
-psMemory = inMemory . psInternal
-
-psInstrPtr :: ProgramState m -> Address
-psInstrPtr = inInstrPtr . psInternal
-
-psRelBase :: ProgramState m -> Address
-psRelBase = inRelBase . psInternal
-
-initProgram :: Program -> m Integer -> (Integer -> m ()) -> ProgramState m
-initProgram intcode readInput writeOutput = ProgramState
-  { psInternal = InternalState
-    { inMemory = initMemory intcode
-    , inInstrPtr = 0
-    , inRelBase = 0
-    }
-  , psReadInput = readInput
-  , psWriteOutput = writeOutput
+initProgram :: Intcode -> ProgramState
+initProgram intcode = ProgramState
+  { psMemory = initMemory intcode
+  , psInstrPtr = 0
+  , psRelBase = 0
   }
 
 data Interrupt
@@ -86,80 +55,85 @@ liftInterrupt :: Monad m => String -> Either String a -> ProgramT m a
 liftInterrupt prefix = liftEither . first (InterruptError . (prefix <>))
 
 newtype ProgramT m a = ProgramT
-  { unProgramT :: ExceptT Interrupt (StateT (ProgramState m) m) a
+  { unProgramT
+    :: ExceptT Interrupt (RWST (Env m) Outputs ProgramState m) a
   }
   deriving
     ( Functor, Applicative, Monad
-    , MonadState (ProgramState m)
     , MonadError Interrupt
+    , MonadReader (Env m)
+    , MonadWriter Outputs
+    , MonadState ProgramState
+    , MonadRWS (Env m) Outputs ProgramState
     )
 
 instance MonadTrans ProgramT where
   lift = ProgramT . lift . lift
 
-runProgramT :: ProgramT m a -> ProgramState m -> m (Result m a)
-runProgramT pt = runStateT (runExceptT (unProgramT pt))
+runProgramT :: ProgramT m a -> Env m -> ProgramState -> m (Result a)
+runProgramT pt = runRWST (runExceptT (unProgramT pt))
 
-interactProgram
-  :: MonadWriter [Integer] m
-  => Program -> ([Integer] -> m Integer)
-  -> m (Result m (), [Integer])
-interactProgram intcode outputInput = loop ps0
-  where
-    ps0 = initProgram intcode (outputInput []) (\i -> tell [i])
-    loop ps = do
-      let program = executeCurrent >> executeUntilInput
-      ((value, ps'), outputs) <- listen $ runProgramT program ps
-      case value of
-        Left interrupt -> pure ((Left interrupt, ps'), outputs)
-        Right _ -> loop ps' { psReadInput = outputInput outputs }
+type Result a = (Either Interrupt a, ProgramState, Outputs)
 
-type Result m a = (Either Interrupt a, ProgramState m)
+type ProgramM = ProgramT Identity
+
+runProgramM :: ProgramM a -> Integer -> Intcode -> Result a
+runProgramM pt i ic = runIdentity $ runProgramT pt (pure i) (initProgram ic)
 
 class Monad m => MonadProgram m where
-  executeCurrent :: m (Maybe Integer)
-  executeUntilInput :: m [Integer]
+  executeCurrent :: m ()
+  executeUntilOp :: Op -> m ()
   execute :: m ()
   execute = sequence_ (repeat executeCurrent)
 
 instance Monad m => MonadProgram (ProgramT m) where
   executeCurrent = pmExecCurrent
-  executeUntilInput = pmExecUntilOp Input
+  executeUntilOp = pmExecUntilOp
 
-executeUntilOutput :: MonadProgram m => m Integer
-executeUntilOutput = do
-  mOutput <- executeCurrent
-  case mOutput of
-    Nothing -> executeUntilOutput
-    Just output -> pure output
+executeThroughOp :: MonadProgram m => Op -> m ()
+executeThroughOp op = do
+  executeUntilOp op
+  executeCurrent
 
 executeN :: MonadProgram m => Int -> m ()
 executeN n = replicateM_ n executeCurrent
 
-pmExecCurrent :: Monad m => ProgramT m (Maybe Integer)
+-- | Runs the program interactively by collecting outputs until the next
+-- input instruction, then passing the outputs to the given function to
+-- provide the input value. This is repeated until the program halts. Each
+-- input instruction only gets the outputs since the last input instruction.
+-- The final output from the Writer is the outputs since the last input
+-- instruction.
+interactProgram
+  :: (MonadReader (Env n) m, MonadWriter Outputs m, MonadProgram m)
+  => ([Integer] -> n Integer)
+  -> m ()
+interactProgram inFromOut = do
+  (_, outputs) <- censor (const []) $ listen $ executeUntilOp Input
+  local (const $ inFromOut outputs) executeCurrent
+  interactProgram inFromOut
+
+pmExecCurrent :: Monad m => ProgramT m ()
 pmExecCurrent = do
   instr <- pmInstr
-  result <- pmApplyInstr instr
-  unless (didJump result) $
+  didJump <- pmApplyInstr instr
+  unless didJump $
     pmAdvance (getOffset instr)
-  pure (getOutput result)
 
-pmExecUntilOp :: Monad m => Op -> ProgramT m [Integer]
-pmExecUntilOp op = loop []
-  where
-    loop outputs = do
-      instr <- pmInstr
-      if iOp instr == op
-        then pure (reverse $ catMaybes outputs)
-        else do
-          output <- pmExecCurrent
-          loop (output : outputs)
+pmExecUntilOp :: Monad m => Op -> ProgramT m ()
+pmExecUntilOp op = do
+  instr <- pmInstr
+  if iOp instr == op
+    then pure ()
+    else do
+      pmExecCurrent
+      pmExecUntilOp op
 
 pmSet :: Monad m => Address -> Integer -> ProgramT m ()
 pmSet addr i = do
   mem <- gets psMemory
   mem' <- liftInterrupt "pmSet: " $ memSet addr i mem
-  modify' $ overInternal $ overMemory (const mem')
+  modify' $ overMemory (const mem')
 
 pmGet :: Monad m => Address -> ProgramT m Integer
 pmGet addr = do
@@ -183,45 +157,28 @@ pmHalt = throwError InterruptHalt
 
 pmInstr :: Monad m => ProgramT m Instr
 pmInstr = do
-  ip <- gets (inInstrPtr . psInternal)
-  mem <- gets (inMemory . psInternal)
+  ip <- gets psInstrPtr
+  mem <- gets psMemory
   liftInterrupt "pmInstr: " $ readInstr ip mem
 
 pmAdvance :: Monad m => Integer -> ProgramT m ()
-pmAdvance offset = modify' $ overInternal $ overInstrPtr (+ A offset)
+pmAdvance offset = modify' $ overInstrPtr (+ A offset)
 
 pmJump :: Monad m => Address -> ProgramT m ()
-pmJump addr = modify' $ overInternal $ overInstrPtr (const addr)
+pmJump addr = modify' $ overInstrPtr (const addr)
 
 pmOffsetRelBase :: Monad m => Integer -> ProgramT m ()
-pmOffsetRelBase offset = modify' $ overInternal $ overRelBase (+ A offset)
+pmOffsetRelBase offset = modify' $ overRelBase (+ A offset)
 
 pmReadInput :: Monad m => ProgramT m Integer
 pmReadInput = do
-  readInput <- gets psReadInput
+  readInput <- ask
   lift readInput
 
 pmWriteOutput :: Monad m => Integer -> ProgramT m ()
-pmWriteOutput i = do
-  writeOutput <- gets psWriteOutput
-  lift (writeOutput i)
+pmWriteOutput i = tell [i]
 
-data InstrResult
-  = Jumped
-  | Out Integer
-  | Empty
-
-didJump :: InstrResult -> Bool
-didJump ir = case ir of
-  Jumped -> True
-  _ -> False
-
-getOutput :: InstrResult -> Maybe Integer
-getOutput ir = case ir of
-  Out i -> Just i
-  _ -> Nothing
-
-pmApplyInstr :: Monad m => Instr -> ProgramT m InstrResult
+pmApplyInstr :: Monad m => Instr -> ProgramT m Bool -- whether IP jumped
 pmApplyInstr instr =
   case (iOp instr, iParams instr) of
     (Add, [pi0, pi1, pout]) -> do
@@ -229,54 +186,54 @@ pmApplyInstr instr =
       i1 <- pmEvalP pi1
       addr <- pmAddressP pout
       pmSet addr (i0 + i1)
-      pure Empty
+      pure False
     (Multiply, [pi0, pi1, pout]) -> do
       i0 <- pmEvalP pi0
       i1 <- pmEvalP pi1
       addr <- pmAddressP pout
       pmSet addr (i0 * i1)
-      pure Empty
+      pure False
     (Input, [pout]) -> do
       i <- pmReadInput
       addr <- pmAddressP pout
       pmSet addr i
-      pure Empty
+      pure False
     (Output, [pi0]) -> do
       i0 <- pmEvalP pi0
       pmWriteOutput i0
-      pure (Out i0)
+      pure False
     (JumpIfTrue, [pi0, pi1]) -> do
       i0 <- pmEvalP pi0
       i1 <- pmEvalP pi1
       let jump = i0 /= 0
       when jump $
         pmJump (A i1)
-      pure (if jump then Jumped else Empty)
+      pure jump
     (JumpIfFalse, [pi0, pi1]) -> do
       i0 <- pmEvalP pi0
       i1 <- pmEvalP pi1
       let jump = i0 == 0
       when jump $
         pmJump (A i1)
-      pure (if jump then Jumped else Empty)
+      pure jump
     (LessThan, [pi0, pi1, pout]) -> do
       i0 <- pmEvalP pi0
       i1 <- pmEvalP pi1
       addr <- pmAddressP pout
       let value = if i0 < i1 then 1 else 0
       pmSet addr value
-      pure Empty
+      pure False
     (Equals, [pi0, pi1, pout]) -> do
       i0 <- pmEvalP pi0
       i1 <- pmEvalP pi1
       addr <- pmAddressP pout
       let value = if i0 == i1 then 1 else 0
       pmSet addr value
-      pure Empty
+      pure False
     (RelBaseOffset, [pi0]) -> do
       i0 <- pmEvalP pi0
       pmOffsetRelBase i0
-      pure Empty
+      pure False
     (Halt, []) -> do
       pmHalt
-      pure Empty
+      pure False
