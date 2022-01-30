@@ -58,3 +58,12 @@ bfs getAdjs initialQueue = loop initialSeen initialQueue Seq.empty
 -- [Just 0,Just 1,Just 2,Just 3,Just 4,Just 5,Just 6,Nothing,Nothing,Nothing]
 iterateM :: Monad m => (a -> m a) -> m a -> [m a]
 iterateM f mx = mx : iterateM f (f =<< mx)
+
+getInputLn :: String -> (String -> Maybe a) -> IO a
+getInputLn errMsg f = do
+  str <- getLine
+  case f str of
+    Just x -> pure x
+    Nothing -> do
+      putStrLn errMsg
+      getInputLn errMsg f

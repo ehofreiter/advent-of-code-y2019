@@ -56,7 +56,7 @@ part2 intcode = breakout intcode solve
 breakoutPrompt :: IC.Program -> IO ()
 breakoutPrompt intcode = do
   putStrLn "Choose mode: a/p/s (a = autoplay, p = play, s = solve)"
-  playType <- getInputLn $ \case
+  playType <- getInputLn "Invalid input." $ \case
     'a':_ -> Just autoPlay
     'p':_ -> Just play
     's':_ -> Just solve
@@ -70,13 +70,6 @@ breakout intcode playType = do
   where
     resultM p = IC.runProgramT (IC.interactProgram p) (pure 0) ps0
     ps0 = IC.initProgram (mkFree intcode)
-
-getInputLn :: (String -> Maybe a) -> IO a
-getInputLn f = do
-  str <- getLine
-  case f str of
-    Just x -> pure x
-    Nothing -> getInputLn f
 
 mkFree :: IC.Program -> IC.Program
 mkFree (i:p) = 2:p
@@ -109,7 +102,7 @@ play outputs = do
 getJoystick :: IO Integer
 getJoystick = do
   putStrLn "Tilt joystick: a/s/d (a = left, s = neutral, d = right)"
-  getInputLn $ \case
+  getInputLn "Invalid input." $ \case
     "a" -> Just (-1)
     "s" -> Just 0
     "d" -> Just 1
