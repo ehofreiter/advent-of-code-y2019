@@ -2,7 +2,7 @@ module Main where
 
 import System.Environment
 
-import AOC2019.Day13Part2
+import AOC2019.Day16
 
 main :: IO ()
 main = run
