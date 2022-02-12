@@ -44,6 +44,7 @@ library
       AOC2019.Day7
       AOC2019.Day8
       AOC2019.Day9
+      AOC2019.InOut
       AOC2019.Intcode
       AOC2019.Intcode13
       AOC2019.Intcode15
@@ -56,6 +57,7 @@ library
   build-depends:
       base >=4.7 && <5
     , containers
+    , free
     , indexed-traversable
     , lens
     , linear
@@ -76,6 +78,7 @@ executable advent-of-code-y2019-exe
       advent-of-code-y2019
     , base >=4.7 && <5
     , containers
+    , free
     , indexed-traversable
     , lens
     , linear
@@ -96,6 +99,7 @@ executable breakout-exe
       advent-of-code-y2019
     , base >=4.7 && <5
     , containers
+    , free
     , indexed-traversable
     , lens
     , linear
@@ -117,6 +121,7 @@ test-suite advent-of-code-y2019-test
       advent-of-code-y2019
     , base >=4.7 && <5
     , containers
+    , free
     , indexed-traversable
     , lens
     , linear
