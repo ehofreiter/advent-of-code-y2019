@@ -74,6 +74,10 @@ instance MonadState s m => MonadState s (ProgramT m) where
   put = lift . put
   state = lift . state
 
+instance MonadReader (Env m) m => MonadReader (Env m) (ProgramT m) where
+  ask = lift ask
+  local f pt = ProgramT $ ExceptT $ RWST $ \r s -> runProgramT pt (f r) s
+
 runProgramT :: ProgramT m a -> Env m -> ProgramState -> m (Result a)
 runProgramT pt = runRWST (runExceptT (unProgramT pt))
 
@@ -116,6 +120,14 @@ interactProgram inFromOut = do
   (_, outputs) <- censor (const []) $ listen $ executeUntilOp Input
   local (const $ inFromOut outputs) executeCurrent
   interactProgram inFromOut
+
+interactProgramT :: Monad m => ([Integer] -> m Integer) -> ProgramT m ()
+interactProgramT inFromOut = ProgramT $ do
+  (_, outputs)
+    <- censor (const [])
+    $  listen (unProgramT (executeUntilOp Input))
+  local (const $ inFromOut outputs) (unProgramT executeCurrent)
+  unProgramT (interactProgramT inFromOut)
 
 pmExecCurrent :: Monad m => ProgramT m ()
 pmExecCurrent = do
