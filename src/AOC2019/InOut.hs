@@ -1,5 +1,5 @@
 {-# LANGUAGE ScopedTypeVariables #-}
-module InOut where
+module AOC2019.InOut where
 
 import Prelude hiding (interact)
 import qualified Control.Monad.Free as MF

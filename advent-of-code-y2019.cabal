@@ -25,6 +25,7 @@ source-repository head
 library
   exposed-modules:
       AOC2019.Common
+      AOC2019.CoordVec
       AOC2019.Day1
       AOC2019.Day10
       AOC2019.Day11
@@ -35,6 +36,7 @@ library
       AOC2019.Day15
       AOC2019.Day16
       AOC2019.Day17
+      AOC2019.Day18
       AOC2019.Day2
       AOC2019.Day3
       AOC2019.Day3Part2
